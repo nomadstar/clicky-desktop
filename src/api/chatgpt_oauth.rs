@@ -31,9 +31,72 @@ impl ChatGptSession {
     }
 
     pub fn load() -> Option<Self> {
-        let path = Self::session_file_path()?;
-        let raw = fs::read_to_string(path).ok()?;
-        serde_json::from_str(&raw).ok()
+        if let Some(path) = Self::session_file_path() {
+            if let Ok(raw) = fs::read_to_string(&path) {
+                if let Ok(session) = serde_json::from_str::<Self>(&raw) {
+                    return Some(session);
+                }
+            }
+        }
+        // Auto-fallback: if no Clicky session file exists, check for existing Codex session
+        Self::import_codex_session().ok()
+    }
+
+    pub fn has_codex_session() -> bool {
+        if let Ok(home) = std::env::var("HOME") {
+            let path = PathBuf::from(home).join(".codex/auth.json");
+            return path.exists();
+        }
+        false
+    }
+
+    /// Imports an active ChatGPT session from ~/.codex/auth.json
+    pub fn import_codex_session() -> Result<Self, String> {
+        let home = std::env::var("HOME")
+            .map_err(|e| format!("Cannot locate HOME directory: {e}"))?;
+        let codex_auth = PathBuf::from(home).join(".codex/auth.json");
+        if !codex_auth.exists() {
+            return Err("No se encontró el archivo de autenticación de Codex en ~/.codex/auth.json".to_string());
+        }
+
+        let raw = fs::read_to_string(&codex_auth)
+            .map_err(|e| format!("Error al leer ~/.codex/auth.json: {e}"))?;
+
+        let parsed: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|e| format!("Formato inválido en ~/.codex/auth.json: {e}"))?;
+
+        let tokens = parsed
+            .get("tokens")
+            .ok_or("No se encontró la sección 'tokens' en ~/.codex/auth.json")?;
+
+        let access_token = tokens
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .ok_or("No se encontró 'access_token' en ~/.codex/auth.json")?
+            .to_string();
+
+        let refresh_token = tokens
+            .get("refresh_token")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let email = parsed
+            .get("email")
+            .or_else(|| tokens.get("account_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        let session = ChatGptSession {
+            access_token,
+            refresh_token,
+            expires_at: None,
+            email,
+            client_id: Some("app_EMoamEEZ73f0CkXaXp7hrann".to_string()),
+        };
+
+        session.save()?;
+        info!("Imported active ChatGPT session from ~/.codex/auth.json");
+        Ok(session)
     }
 
     pub fn save(&self) -> Result<(), String> {

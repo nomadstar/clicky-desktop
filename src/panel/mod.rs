@@ -287,16 +287,50 @@ mod native {
                                 let session = crate::api::chatgpt_oauth::ChatGptSession::load();
                                 if let Some(_sess) = session {
                                     ui.colored_label(egui::Color32::from_rgb(90, 180, 120), "✓ Sesión activa con ChatGPT (Plus/Pro/Team)");
-                                    if ui.button("Cerrar sesión de ChatGPT").clicked() {
-                                        let _ = crate::api::chatgpt_oauth::ChatGptSession::clear();
-                                        if let Ok(mut lock) = self.chatgpt_auth_url.lock() {
-                                            *lock = None;
+                                    ui.horizontal(|ui| {
+                                        if crate::api::chatgpt_oauth::ChatGptSession::has_codex_session() {
+                                            if ui.button("⚡ Re-sincronizar desde Codex").clicked() {
+                                                match crate::api::chatgpt_oauth::ChatGptSession::import_codex_session() {
+                                                    Ok(_) => {
+                                                        self.status_message = Some("✓ Sesión re-sincronizada desde ~/.codex/auth.json".into());
+                                                        self.status_is_error = false;
+                                                    }
+                                                    Err(e) => {
+                                                        self.status_message = Some(format!("Error: {e}"));
+                                                        self.status_is_error = true;
+                                                    }
+                                                }
+                                            }
                                         }
-                                        self.status_message = Some("Sesión de ChatGPT cerrada.".into());
-                                        self.status_is_error = false;
-                                    }
+                                        if ui.button("Cerrar sesión de ChatGPT").clicked() {
+                                            let _ = crate::api::chatgpt_oauth::ChatGptSession::clear();
+                                            if let Ok(mut lock) = self.chatgpt_auth_url.lock() {
+                                                *lock = None;
+                                            }
+                                            self.status_message = Some("Sesión de ChatGPT cerrada.".into());
+                                            self.status_is_error = false;
+                                        }
+                                    });
                                 } else {
-                                    ui.colored_label(egui::Color32::from_rgb(220, 140, 60), "⚠ No conectado. Inicia sesión con tu cuenta de ChatGPT:");
+                                    ui.colored_label(egui::Color32::from_rgb(220, 140, 60), "⚠ No conectado a ChatGPT:");
+
+                                    if crate::api::chatgpt_oauth::ChatGptSession::has_codex_session() {
+                                        if ui.button("⚡ Conectar usando sesión de Codex (~/.codex/auth.json)").clicked() {
+                                            match crate::api::chatgpt_oauth::ChatGptSession::import_codex_session() {
+                                                Ok(_) => {
+                                                    self.status_message = Some("✓ ¡Sesión de ChatGPT importada desde Codex con éxito!".into());
+                                                    self.status_is_error = false;
+                                                }
+                                                Err(e) => {
+                                                    self.status_message = Some(format!("Error al importar sesión: {e}"));
+                                                    self.status_is_error = true;
+                                                }
+                                            }
+                                        }
+                                        ui.add_space(4.0);
+                                        ui.separator();
+                                        ui.label("O iniciar sesión mediante OAuth en el navegador:");
+                                    }
 
                                     let is_waiting = {
                                         let lock = self.chatgpt_auth_url.lock().ok();

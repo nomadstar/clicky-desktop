@@ -133,6 +133,30 @@ Or invoke the bundled helper script:
 
 For complete configuration and troubleshooting, check the [NixOS & Hyprland Guide](docs/nix-hyprland-setup.md).
 
+## ChatGPT Plus/Pro Integration (Sign in with ChatGPT & Codex)
+
+Clicky supports using your personal ChatGPT subscription (Plus, Pro, or Team) so you don't need a pay-per-token API key:
+
+### Option 1: Automatic Connection via Codex (Recommended)
+If you already use Codex or have logged in with ChatGPT on your machine:
+- Clicky automatically detects your active session in `~/.codex/auth.json`.
+- In the Settings window (`CLICKY_FORCE_SETUP_WINDOW=1 nix run`), select **ChatGPT** as your Vision LLM and click **"⚡ Conectar usando sesión de Codex"**.
+- Clicky will immediately connect using your active subscription tokens without needing browser popups or registration.
+
+### Option 2: Registering a Custom OAuth App on OpenAI
+If you want to use the browser-based "Sign in with ChatGPT" flow with your own Client ID:
+1. Log in to the [OpenAI Developer Dashboard](https://platform.openai.com/).
+2. Navigate to **Settings** > **Applications** (or **OAuth / Sign in with ChatGPT**).
+3. Create a new Application:
+   - **Application Type**: Public Client / Native Desktop App (PKCE).
+   - **Redirect URI**: `http://127.0.0.1/callback` (or your loopback port).
+   - **Scopes**: `openid profile email offline_access`.
+4. Copy the issued **Client ID** (typically formatted as `oaiapp_...`).
+5. In Clicky Settings -> **Vision LLM** -> **ChatGPT**:
+   - Open **Opciones avanzadas (Client ID)**.
+   - Paste your `oaiapp_...` Client ID into **Custom Client ID**.
+   - Click **🔑 Iniciar sesión con ChatGPT (Abrir navegador)** to authenticate.
+
 ## Debug flags
 
 ```bash
