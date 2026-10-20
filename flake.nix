@@ -17,6 +17,7 @@
           gtk3
           openssl
           libGL
+          libgbm
           libxkbcommon
           wayland
           libx11
@@ -24,6 +25,7 @@
           libxrandr
           libxi
           libxinerama
+          libxcb
           systemd
           xdotool
         ];

@@ -15,6 +15,7 @@ pkgs.mkShell {
     gtk3
     openssl
     libGL
+    libgbm
     libxkbcommon
     wayland
     libx11
@@ -22,6 +23,7 @@ pkgs.mkShell {
     libxrandr
     libxi
     libxinerama
+    libxcb
     systemd
     xdotool
     grim
