@@ -84,17 +84,52 @@ cargo build --release
 ./target/release/clicky-desktop
 ```
 
+### Nix / NixOS
+
+Run directly using flakes:
+
+```bash
+nix run
+```
+
+Or enter a development shell:
+
+```bash
+nix develop # or nix-shell
+cargo run
+```
+
+> **Note for NixOS**: Add your user to the `input` group in `configuration.nix` so Clicky can track global hotkeys and mouse movement via evdev:
+> `users.users.<username>.extraGroups = [ "input" ];`
+
 ## Hyprland users
 
 Add these window rules to your `hyprland.conf` for proper overlay behavior:
 
-```
+```ini
 windowrulev2 = float, class:clicky-overlay
 windowrulev2 = pin, class:clicky-overlay
 windowrulev2 = nofocus, class:clicky-overlay
 windowrulev2 = noshadow, class:clicky-overlay
 windowrulev2 = noborder, class:clicky-overlay
 windowrulev2 = noanim, class:clicky-overlay
+```
+
+Ensure `grim` is installed for screenshot capture under Wayland.
+
+### Emergency Kill Switch (si Clicky se vuelve loco)
+
+To instantly terminate Clicky if it ever freezes or misbehaves, add a keybinding to `hyprland.conf`:
+
+```ini
+# Emergency kill-switch (SIGKILL)
+bind = $mainMod SHIFT, Escape, exec, pkill -9 -f clicky-desktop
+```
+
+Or invoke the bundled helper script:
+
+```bash
+./scripts/kill-clicky.sh
 ```
 
 ## Debug flags
