@@ -226,6 +226,21 @@ mod native {
 
     impl eframe::App for SettingsApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+            if let Ok(mut status_lock) = self.chatgpt_status.try_lock() {
+                if let Some((msg, is_err)) = status_lock.take() {
+                    self.status_message = Some(msg);
+                    self.status_is_error = is_err;
+                }
+            }
+
+            let is_waiting_oauth = {
+                let lock = self.chatgpt_auth_url.lock().ok();
+                lock.as_ref().and_then(|l| l.as_ref()).is_some()
+            };
+            if is_waiting_oauth {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+
             egui::CentralPanel::default().show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.add_space(8.0);
@@ -274,34 +289,101 @@ mod native {
                                     ui.colored_label(egui::Color32::from_rgb(90, 180, 120), "✓ Sesión activa con ChatGPT (Plus/Pro/Team)");
                                     if ui.button("Cerrar sesión de ChatGPT").clicked() {
                                         let _ = crate::api::chatgpt_oauth::ChatGptSession::clear();
+                                        if let Ok(mut lock) = self.chatgpt_auth_url.lock() {
+                                            *lock = None;
+                                        }
                                         self.status_message = Some("Sesión de ChatGPT cerrada.".into());
                                         self.status_is_error = false;
                                     }
                                 } else {
                                     ui.colored_label(egui::Color32::from_rgb(220, 140, 60), "⚠ No conectado. Inicia sesión con tu cuenta de ChatGPT:");
-                                    if ui.button("🔑 Iniciar sesión con ChatGPT (Abrir navegador)").clicked() {
-                                        let client_id = if self.chatgpt_client_id.trim().is_empty() {
-                                            crate::api::chatgpt_oauth::DEFAULT_CHATGPT_CLIENT_ID.to_string()
-                                        } else {
-                                            self.chatgpt_client_id.trim().to_string()
-                                        };
-                                        self.status_message = Some("Esperando autorización en el navegador...".into());
-                                        self.status_is_error = false;
 
-                                        std::thread::spawn(move || {
-                                            let rt = match tokio::runtime::Runtime::new() {
-                                                Ok(rt) => rt,
-                                                Err(e) => {
-                                                    log::error!("Failed to create runtime: {e}");
-                                                    return;
-                                                }
+                                    let is_waiting = {
+                                        let lock = self.chatgpt_auth_url.lock().ok();
+                                        lock.as_ref().and_then(|l| l.as_ref()).is_some()
+                                    };
+
+                                    if !is_waiting {
+                                        if ui.button("🔑 Iniciar sesión con ChatGPT (Abrir navegador)").clicked() {
+                                            let client_id = if self.chatgpt_client_id.trim().is_empty() {
+                                                crate::api::chatgpt_oauth::DEFAULT_CHATGPT_CLIENT_ID.to_string()
+                                            } else {
+                                                self.chatgpt_client_id.trim().to_string()
                                             };
-                                            let client = reqwest::Client::new();
-                                            match rt.block_on(crate::api::chatgpt_oauth::login_with_chatgpt(&client, &client_id)) {
-                                                Ok(_) => log::info!("ChatGPT OAuth login successful!"),
-                                                Err(e) => log::error!("ChatGPT OAuth login failed: {}", e),
-                                            }
+                                            self.status_message = Some("Generando enlace y abriendo navegador...".into());
+                                            self.status_is_error = false;
+
+                                            let url_slot = Arc::clone(&self.chatgpt_auth_url);
+                                            let status_slot = Arc::clone(&self.chatgpt_status);
+
+                                            std::thread::spawn(move || {
+                                                let rt = match tokio::runtime::Runtime::new() {
+                                                    Ok(rt) => rt,
+                                                    Err(e) => {
+                                                        log::error!("Failed to create runtime: {e}");
+                                                        if let Ok(mut s) = status_slot.lock() {
+                                                            *s = Some((format!("Error: {e}"), true));
+                                                        }
+                                                        return;
+                                                    }
+                                                };
+                                                let client = reqwest::Client::new();
+                                                match rt.block_on(crate::api::chatgpt_oauth::login_with_chatgpt(&client, &client_id, Some(url_slot.clone()))) {
+                                                    Ok(_) => {
+                                                        log::info!("ChatGPT OAuth login successful!");
+                                                        if let Ok(mut s) = status_slot.lock() {
+                                                            *s = Some(("¡Inicio de sesión en ChatGPT completado con éxito!".into(), false));
+                                                        }
+                                                        if let Ok(mut u) = url_slot.lock() {
+                                                            *u = None;
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        log::error!("ChatGPT OAuth login failed: {}", e);
+                                                        if let Ok(mut s) = status_slot.lock() {
+                                                            *s = Some((format!("Error de autenticación: {e}"), true));
+                                                        }
+                                                        if let Ok(mut u) = url_slot.lock() {
+                                                            *u = None;
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    } else {
+                                        ui.horizontal(|ui| {
+                                            ui.spinner();
+                                            ui.label("Esperando que completes el login en tu navegador...");
                                         });
+
+                                        let current_url = {
+                                            self.chatgpt_auth_url.lock().ok().and_then(|l| l.clone())
+                                        };
+
+                                        if let Some(ref url) = current_url {
+                                            ui.add_space(4.0);
+                                            ui.label("Si el navegador no abrió automáticamente:");
+                                            ui.horizontal(|ui| {
+                                                if ui.button("🌐 Abrir navegador de nuevo").clicked() {
+                                                    let _ = crate::api::chatgpt_oauth::open_browser(url);
+                                                }
+                                                if ui.button("📋 Copiar enlace").clicked() {
+                                                    ui.ctx().copy_text(url.clone());
+                                                    self.status_message = Some("Enlace copiado al portapapeles".into());
+                                                    self.status_is_error = false;
+                                                }
+                                            });
+                                            ui.hyperlink_to("🔗 Abrir enlace directo en el navegador", url);
+                                        }
+
+                                        ui.add_space(4.0);
+                                        if ui.button("Cancelar inicio de sesión").clicked() {
+                                            if let Ok(mut u) = self.chatgpt_auth_url.lock() {
+                                                *u = None;
+                                            }
+                                            self.status_message = Some("Inicio de sesión cancelado".into());
+                                            self.status_is_error = false;
+                                        }
                                     }
                                 }
 
