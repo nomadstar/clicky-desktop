@@ -23,6 +23,20 @@ pub enum UiEvent {
     TtsAudio(Vec<u8>),
     /// TTS synthesis failed — caller should fall back to espeak-ng.
     TtsError(String),
+    /// External command via IPC / MCP to point cursor at target
+    ExternalPoint {
+        x: f64,
+        y: f64,
+        label: Option<String>,
+    },
+    /// External command via IPC / MCP to show speech bubble
+    ExternalBubble {
+        text: String,
+    },
+    /// External command via IPC to open Settings window
+    OpenSettings,
+    /// External command via IPC to gracefully quit Clicky
+    Quit,
 }
 
 /// Audio subsystem errors. All are recoverable — the app continues without audio.

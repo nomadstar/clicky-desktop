@@ -443,55 +443,12 @@ pub async fn run_llm_pipeline(
                     let tts_text = parsed.spoken_text.clone();
 
                     tokio::spawn(async move {
-                        match tts_conf {
-                            TtsConfig::ElevenLabs { api_key, voice_id } => {
-                                match api::elevenlabs::synthesize_speech(
-                                    &tts_client,
-                                    &api_key,
-                                    voice_id.as_deref(),
-                                    &tts_text,
-                                )
-                                .await
-                                {
-                                    Ok(mp3_bytes) => {
-                                        let _ = tts_ui_tx.send(UiEvent::TtsAudio(mp3_bytes));
-                                    }
-                                    Err(error) => {
-                                        let _ = tts_ui_tx.send(UiEvent::TtsError(error.to_string()));
-                                    }
-                                }
+                        match synthesize_speech(&tts_client, &tts_conf, &tts_text).await {
+                            Ok(mp3_bytes) => {
+                                let _ = tts_ui_tx.send(UiEvent::TtsAudio(mp3_bytes));
                             }
-                            TtsConfig::EdgeTts { voice } => {
-                                match api::edge_tts::synthesize_speech(&tts_text, voice.as_deref()).await {
-                                    Ok(mp3_bytes) => {
-                                        let _ = tts_ui_tx.send(UiEvent::TtsAudio(mp3_bytes));
-                                    }
-                                    Err(error) => {
-                                        let _ = tts_ui_tx.send(UiEvent::TtsError(error));
-                                    }
-                                }
-                            }
-                            TtsConfig::OpenAiCompat { base_url, api_key, model, voice } => {
-                                match api::openai_tts::synthesize_speech(
-                                    &tts_client,
-                                    &base_url,
-                                    api_key.as_deref(),
-                                    &model,
-                                    &voice,
-                                    &tts_text,
-                                )
-                                .await
-                                {
-                                    Ok(mp3_bytes) => {
-                                        let _ = tts_ui_tx.send(UiEvent::TtsAudio(mp3_bytes));
-                                    }
-                                    Err(error) => {
-                                        let _ = tts_ui_tx.send(UiEvent::TtsError(error));
-                                    }
-                                }
-                            }
-                            TtsConfig::System => {
-                                let _ = tts_ui_tx.send(UiEvent::TtsError("Fallback to system espeak-ng".into()));
+                            Err(error) => {
+                                let _ = tts_ui_tx.send(UiEvent::TtsError(error));
                             }
                         }
                     });
@@ -598,4 +555,71 @@ async fn detect_computer_use_coordinate(
         global_x, global_y
     );
     Some((global_x, global_y))
+}
+
+pub fn build_tts_config(app_config: &config::AppConfig) -> Option<TtsConfig> {
+    match app_config.tts_provider {
+        config::TtsProviderType::ElevenLabs => {
+            app_config.elevenlabs_api_key.as_ref().map(|api_key| {
+                TtsConfig::ElevenLabs {
+                    api_key: api_key.clone(),
+                    voice_id: app_config.elevenlabs_voice_id.clone(),
+                }
+            })
+        }
+        config::TtsProviderType::EdgeTts => {
+            Some(TtsConfig::EdgeTts {
+                voice: app_config.custom_tts_voice.clone(),
+            })
+        }
+        config::TtsProviderType::OpenAiCompat => {
+            let base_url = app_config.custom_tts_base_url.clone()
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            let model = app_config.custom_tts_model.clone()
+                .unwrap_or_else(|| "tts-1".to_string());
+            let voice = app_config.custom_tts_voice.clone()
+                .unwrap_or_else(|| "alloy".to_string());
+            Some(TtsConfig::OpenAiCompat {
+                base_url,
+                api_key: app_config.custom_tts_api_key.clone(),
+                model,
+                voice,
+            })
+        }
+        config::TtsProviderType::System => Some(TtsConfig::System),
+    }
+}
+
+pub async fn synthesize_speech(
+    http_client: &reqwest::Client,
+    tts_config: &TtsConfig,
+    text: &str,
+) -> Result<Vec<u8>, String> {
+    match tts_config {
+        TtsConfig::ElevenLabs { api_key, voice_id } => {
+            api::elevenlabs::synthesize_speech(
+                http_client,
+                api_key,
+                voice_id.as_deref(),
+                text,
+            )
+            .await
+            .map_err(|e| e.to_string())
+        }
+        TtsConfig::EdgeTts { voice } => {
+            api::edge_tts::synthesize_speech(text, voice.as_deref()).await
+        }
+        TtsConfig::OpenAiCompat { base_url, api_key, model, voice } => {
+            api::openai_tts::synthesize_speech(
+                http_client,
+                base_url,
+                api_key.as_deref(),
+                model,
+                voice,
+                text,
+            )
+            .await
+        }
+        TtsConfig::System => Err("Fallback to system espeak-ng".to_string()),
+    }
 }

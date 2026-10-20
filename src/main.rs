@@ -6,6 +6,8 @@ mod config;
 mod core;
 mod cursor_tracker;
 mod hotkey;
+mod ipc;
+mod mcp;
 mod overlay;
 mod panel;
 mod runtime;
@@ -26,6 +28,126 @@ use std::time::{Duration, Instant};
 use tray::TrayMenuEvent;
 
 fn main() {
+    // Check CLI arguments before starting graphical subsystems
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "--mcp" => {
+                let tokio_rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                if let Err(e) = tokio_rt.block_on(mcp::run_mcp_server()) {
+                    eprintln!("MCP server error: {}", e);
+                    std::process::exit(1);
+                }
+                return;
+            }
+            "--status" => {
+                let tokio_rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                match tokio_rt.block_on(ipc::send_command(&ipc::IpcRequest::GetStatus)) {
+                    Ok(ipc::IpcResponse::Status { running: _, voice_state, version }) => {
+                        println!("Clicky Desktop v{} is running (state: {})", version, voice_state);
+                    }
+                    _ => {
+                        println!("Clicky Desktop is not running.");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
+            "--status-json" => {
+                let tokio_rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                match tokio_rt.block_on(ipc::send_command(&ipc::IpcRequest::GetStatus)) {
+                    Ok(ipc::IpcResponse::Status { running: _, voice_state, version }) => {
+                        println!("{}", serde_json::json!({
+                            "text": "󰚩",
+                            "alt": "running",
+                            "tooltip": format!("Clicky v{} (Activo: {})\nClick izq: Ajustes | Click der: Matar", version, voice_state),
+                            "class": "running"
+                        }));
+                    }
+                    _ => {
+                        println!("{}", serde_json::json!({
+                            "text": "󰚩",
+                            "alt": "stopped",
+                            "tooltip": "Clicky (Detenido)\nClick: Iniciar Clicky",
+                            "class": "stopped"
+                        }));
+                    }
+                }
+                return;
+            }
+            "--settings" | "--config" => {
+                let tokio_rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                if let Ok(_) = tokio_rt.block_on(ipc::send_command(&ipc::IpcRequest::OpenSettings)) {
+                    println!("Opened settings in running Clicky instance.");
+                    return;
+                }
+                println!("Clicky is not running. Opening standalone setup window...");
+                let app_config = config::AppConfig::load();
+                panel::run_onboarding_blocking(app_config);
+                return;
+            }
+            "--kill" => {
+                let tokio_rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                let _ = tokio_rt.block_on(ipc::send_command(&ipc::IpcRequest::Kill));
+                let _ = std::process::Command::new("pkill")
+                    .args(["-15", "-f", "clicky-desktop"])
+                    .status();
+                let _ = std::process::Command::new("notify-send")
+                    .args(["Clicky Desktop", "Clicky detenido correctamente", "-i", "process-stop"])
+                    .status();
+                println!("Clicky Desktop termination signal sent.");
+                return;
+            }
+            "--point" => {
+                if args.len() < 4 {
+                    eprintln!("Usage: clicky-desktop --point <x> <y> [label]");
+                    std::process::exit(1);
+                }
+                let x: f64 = args[2].parse().unwrap_or(0.0);
+                let y: f64 = args[3].parse().unwrap_or(0.0);
+                let label = args.get(4).cloned();
+                let tokio_rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                match tokio_rt.block_on(ipc::send_command(&ipc::IpcRequest::Point { x, y, label })) {
+                    Ok(resp) => println!("{:?}", resp),
+                    Err(e) => eprintln!("Error: {}", e),
+                }
+                return;
+            }
+            "--speak" => {
+                if args.len() < 3 {
+                    eprintln!("Usage: clicky-desktop --speak <text>");
+                    std::process::exit(1);
+                }
+                let text = args[2..].join(" ");
+                let tokio_rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                match tokio_rt.block_on(ipc::send_command(&ipc::IpcRequest::Speak { text })) {
+                    Ok(resp) => println!("{:?}", resp),
+                    Err(e) => eprintln!("Error: {}", e),
+                }
+                return;
+            }
+            "--help" | "-h" => {
+                println!("Clicky Desktop — Cross-platform AI Companion with Voice, Vision & MCP");
+                println!();
+                println!("USAGE:");
+                println!("  clicky-desktop                Start background daemon and desktop overlay");
+                println!("  clicky-desktop --mcp          Run as Model Context Protocol (MCP) stdio server");
+                println!("  clicky-desktop --status       Show current running status");
+                println!("  clicky-desktop --status-json  Output Waybar-compatible status JSON");
+                println!("  clicky-desktop --settings     Open settings window");
+                println!("  clicky-desktop --kill         Terminate running Clicky instance");
+                println!("  clicky-desktop --point X Y [L] Point to screen coordinates");
+                println!("  clicky-desktop --speak TEXT   Speak aloud with configured TTS");
+                println!("  clicky-desktop --help         Show this help message");
+                return;
+            }
+            unknown => {
+                eprintln!("Unknown argument: {}. Run with --help for options.", unknown);
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Load .env file if present (ignored if missing)
     let _ = dotenvy::dotenv();
     env_logger::init();
@@ -150,6 +272,19 @@ fn main() {
     render_state.bubble_font = renderer::load_bubble_font(&mut raylib_handle, &raylib_thread);
     let mut voice_state = VoiceState::Idle;
 
+    // Shared state for the background IPC server (Waybar / MCP / CLI control)
+    let shared_voice_state = Arc::new(Mutex::new(format!("{:?}", voice_state)));
+    let initial_tts_config = runtime::build_tts_config(&app_config);
+    let shared_tts_config = Arc::new(Mutex::new(initial_tts_config));
+
+    let ipc_state = ipc::IpcSharedState {
+        voice_state: Arc::clone(&shared_voice_state),
+        platform: platform.clone(),
+        http_client: http_client.clone(),
+        tts_config: Arc::clone(&shared_tts_config),
+    };
+    let _ipc_task = ipc::start_ipc_server(ui_event_tx.clone(), ipc_state);
+
     info!("Entering main render loop at 60fps");
 
     let mut frame_count: u64 = 0;
@@ -163,6 +298,13 @@ fn main() {
     while !raylib_handle.window_should_close() {
         frame_count += 1;
         let delta_seconds = raylib_handle.get_frame_time() as f64;
+
+        if let Ok(mut lock) = shared_voice_state.try_lock() {
+            let current_str = format!("{:?}", voice_state);
+            if *lock != current_str {
+                *lock = current_str;
+            }
+        }
         let anthropic_api_key = app_config.anthropic_api_key.clone();
 
         let stt_config = match app_config.stt_provider {
@@ -192,34 +334,7 @@ fn main() {
             }
         };
 
-        let tts_config = match app_config.tts_provider {
-            config::TtsProviderType::ElevenLabs => {
-                app_config.elevenlabs_api_key.clone().map(|api_key| runtime::TtsConfig::ElevenLabs {
-                    api_key,
-                    voice_id: app_config.elevenlabs_voice_id.clone(),
-                })
-            }
-            config::TtsProviderType::EdgeTts => {
-                Some(runtime::TtsConfig::EdgeTts {
-                    voice: app_config.custom_tts_voice.clone(),
-                })
-            }
-            config::TtsProviderType::OpenAiCompat => {
-                let base_url = app_config.custom_tts_base_url.clone()
-                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-                let model = app_config.custom_tts_model.clone()
-                    .unwrap_or_else(|| "tts-1".to_string());
-                let voice = app_config.custom_tts_voice.clone()
-                    .unwrap_or_else(|| "alloy".to_string());
-                Some(runtime::TtsConfig::OpenAiCompat {
-                    base_url,
-                    api_key: app_config.custom_tts_api_key.clone(),
-                    model,
-                    voice,
-                })
-            }
-            config::TtsProviderType::System => Some(runtime::TtsConfig::System),
-        };
+        let tts_config = runtime::build_tts_config(&app_config);
 
         let llm_provider = match app_config.llm_provider {
             config::LlmProviderType::Anthropic => {
@@ -273,6 +388,10 @@ fn main() {
                         "Applied new push-to-talk hotkey: {}",
                         app_config.push_to_talk_hotkey.display_name()
                     );
+                }
+
+                if let Ok(mut lock) = shared_tts_config.lock() {
+                    *lock = runtime::build_tts_config(&app_config);
                 }
             }
         }
@@ -592,6 +711,38 @@ fn main() {
                     render_state.voice_state = voice_state;
                     processing_since = None;
                     claude_pipeline_active = false;
+                }
+                UiEvent::ExternalPoint { x, y, label } => {
+                    let text = label.unwrap_or_else(|| "Clicky pointing here".to_string());
+                    info!("External Point received: ({:.1}, {:.1}) - '{}'", x, y, text);
+                    render_state.start_flight_to(
+                        x - overlay_x as f64,
+                        y - overlay_y as f64,
+                        text.clone(),
+                    );
+                    render_state.speech_bubble_text = text;
+                    voice_state = VoiceState::Responding;
+                    render_state.voice_state = voice_state;
+                    responding_since = Some(std::time::Instant::now());
+                }
+                UiEvent::ExternalBubble { text } => {
+                    info!("External Bubble received: '{}'", text);
+                    render_state.speech_bubble_text = text;
+                    voice_state = VoiceState::Responding;
+                    render_state.voice_state = voice_state;
+                    responding_since = Some(std::time::Instant::now());
+                }
+                UiEvent::OpenSettings => {
+                    info!("External OpenSettings received via IPC");
+                    let latest_config = config::AppConfig::load();
+                    panel::open_settings_window(
+                        latest_config.clone(),
+                        latest_config.needs_onboarding(),
+                    );
+                }
+                UiEvent::Quit => {
+                    info!("External Quit received via IPC");
+                    break;
                 }
             }
         }
