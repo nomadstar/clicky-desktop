@@ -9,10 +9,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-// Default open client ID for Sign in with ChatGPT / OpenAI OAuth
-pub const DEFAULT_CHATGPT_CLIENT_ID: &str = "chatgpt-desktop-clicky";
-const AUTH_URL: &str = "https://auth.openai.com/oauth/authorize";
-const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+// Default client ID for Sign in with ChatGPT: dynamic registration for desktop / open-source clients
+pub const DEFAULT_CHATGPT_CLIENT_ID: &str = "dynamic_agent_client";
+const AUTH_URL: &str = "https://auth.openai.com/api/accounts/authorize";
+const TOKEN_URL: &str = "https://auth.openai.com/api/accounts/oauth/token";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatGptSession {
@@ -20,6 +20,8 @@ pub struct ChatGptSession {
     pub refresh_token: Option<String>,
     pub expires_at: Option<u64>,
     pub email: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 impl ChatGptSession {
@@ -69,15 +71,16 @@ impl ChatGptSession {
     pub async fn get_valid_token(
         &mut self,
         http_client: &Client,
-        client_id: &str,
+        configured_client_id: &str,
     ) -> Result<String, String> {
         if !self.is_expired() {
             return Ok(self.access_token.clone());
         }
 
+        let effective_client_id = self.client_id.as_deref().unwrap_or(configured_client_id);
         if let Some(refresh_token) = &self.refresh_token {
             info!("ChatGPT session token expired, attempting automatic refresh...");
-            match refresh_access_token(http_client, client_id, refresh_token).await {
+            match refresh_access_token(http_client, effective_client_id, refresh_token).await {
                 Ok(new_session) => {
                     *self = new_session;
                     let _ = self.save();
@@ -91,6 +94,24 @@ impl ChatGptSession {
 
         Ok(self.access_token.clone())
     }
+}
+
+/// Retrieves or persists a stable opaque host identifier (URN) for dynamic client registration.
+pub fn get_or_create_host_id() -> String {
+    if let Some(config_dir) = crate::config::config_file_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        let host_id_file = config_dir.join("host_id");
+        if let Ok(id) = fs::read_to_string(&host_id_file) {
+            let trimmed = id.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        let uuid = generate_random_string(32);
+        let host_urn = format!("urn:uuid:{}", uuid);
+        let _ = fs::write(&host_id_file, &host_urn);
+        return host_urn;
+    }
+    "urn:uuid:clicky-desktop-linux".to_string()
 }
 
 /// Opens a URL in the user's default browser, ensuring Linux / NixOS dynamic library
@@ -146,15 +167,25 @@ pub async fn login_with_chatgpt(
 
     let redirect_uri = format!("http://127.0.0.1:{}/callback", port);
 
+    let host_id = get_or_create_host_id();
+
     // 3. Construct OAuth URL
-    let auth_url = format!(
-        "{}?response_type=code&client_id={}&redirect_uri={}&scope=openid%20profile%20email%20model.request%20offline_access&state={}&code_challenge={}&code_challenge_method=S256",
+    let mut auth_url = format!(
+        "{}?response_type=code&client_id={}&redirect_uri={}&scope=openid%20profile%20email%20offline_access&state={}&code_challenge={}&code_challenge_method=S256",
         AUTH_URL,
-        urlencoding(&client_id),
+        urlencoding(client_id),
         urlencoding(&redirect_uri),
         urlencoding(&state),
         urlencoding(&code_challenge)
     );
+
+    if client_id == DEFAULT_CHATGPT_CLIENT_ID {
+        auth_url.push_str(&format!(
+            "&ext_agent_host_id={}&agent_name_hint={}",
+            urlencoding(&host_id),
+            urlencoding("Clicky Desktop")
+        ));
+    }
 
     info!("Opening browser for Sign in with ChatGPT: {}", auth_url);
     if let Some(ref slot) = on_auth_url {
@@ -168,7 +199,7 @@ pub async fn login_with_chatgpt(
     }
 
     // 4. Wait for redirect callback with timeout (2 minutes)
-    let code = tokio::time::timeout(tokio::time::Duration::from_secs(120), async {
+    let (code, effective_client_id) = tokio::time::timeout(tokio::time::Duration::from_secs(120), async {
         let (mut socket, _) = listener
             .accept()
             .await
@@ -182,7 +213,7 @@ pub async fn login_with_chatgpt(
         let request_str = String::from_utf8_lossy(&buffer[..bytes_read]);
 
         // Parse query params from GET /callback?code=...&state=...
-        let (extracted_code, extracted_state) = parse_oauth_callback(&request_str)?;
+        let (extracted_code, extracted_state, returned_client_id) = parse_oauth_callback(&request_str)?;
 
         if extracted_state != state {
             let error_response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<h3>Error: CSRF state mismatch</h3>";
@@ -208,14 +239,15 @@ pub async fn login_with_chatgpt(
         let _ = socket.write_all(response.as_bytes()).await;
         let _ = socket.flush().await;
 
-        Ok(extracted_code)
+        let final_client_id = returned_client_id.unwrap_or_else(|| client_id.to_string());
+        Ok((extracted_code, final_client_id))
     })
     .await
     .map_err(|_| "OAuth login timed out (waited 2 minutes)".to_string())??;
 
     // 5. Exchange authorization code for tokens
-    info!("Authorization code received, exchanging for access token...");
-    exchange_code_for_token(http_client, client_id, &code, &code_verifier, &redirect_uri).await
+    info!("Authorization code received, exchanging for access token with client_id: {}...", effective_client_id);
+    exchange_code_for_token(http_client, &effective_client_id, &code, &code_verifier, &redirect_uri).await
 }
 
 async fn exchange_code_for_token(
@@ -279,6 +311,7 @@ async fn exchange_code_for_token(
         refresh_token,
         expires_at,
         email: None,
+        client_id: Some(client_id.to_string()),
     };
 
     let _ = session.save();
@@ -340,10 +373,11 @@ async fn refresh_access_token(
         refresh_token: new_refresh_token,
         expires_at,
         email: None,
+        client_id: Some(client_id.to_string()),
     })
 }
 
-fn parse_oauth_callback(request: &str) -> Result<(String, String), String> {
+fn parse_oauth_callback(request: &str) -> Result<(String, String, Option<String>), String> {
     let first_line = request.lines().next().ok_or("Empty HTTP request")?;
     let path_and_query = first_line
         .split_whitespace()
@@ -354,6 +388,9 @@ fn parse_oauth_callback(request: &str) -> Result<(String, String), String> {
 
     let mut code = None;
     let mut state = None;
+    let mut client_id = None;
+    let mut error = None;
+    let mut error_description = None;
 
     for param in query.split('&') {
         let mut parts = param.split('=');
@@ -361,15 +398,23 @@ fn parse_oauth_callback(request: &str) -> Result<(String, String), String> {
             match k {
                 "code" => code = Some(v.to_string()),
                 "state" => state = Some(v.to_string()),
+                "client_id" => client_id = Some(v.to_string()),
+                "error" => error = Some(v.to_string()),
+                "error_description" => error_description = Some(v.to_string()),
                 _ => {}
             }
         }
     }
 
+    if let Some(err) = error {
+        let desc = error_description.unwrap_or_default();
+        return Err(format!("OpenAI OAuth error: {} ({})", err, desc));
+    }
+
     let code = code.ok_or("Missing 'code' parameter in callback")?;
     let state = state.ok_or("Missing 'state' parameter in callback")?;
 
-    Ok((code, state))
+    Ok((code, state, client_id))
 }
 
 fn generate_random_string(length: usize) -> String {
@@ -435,9 +480,10 @@ mod tests {
     #[test]
     fn test_parse_oauth_callback_success() {
         let request = "GET /callback?code=sample_code_123&state=xyzState456 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
-        let (code, state) = parse_oauth_callback(request).expect("Should parse query");
+        let (code, state, client_id) = parse_oauth_callback(request).expect("Should parse query");
         assert_eq!(code, "sample_code_123");
         assert_eq!(state, "xyzState456");
+        assert_eq!(client_id, None);
     }
 
     #[test]
