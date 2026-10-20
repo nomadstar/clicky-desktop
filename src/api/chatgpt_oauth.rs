@@ -96,22 +96,54 @@ impl ChatGptSession {
     }
 }
 
-/// Retrieves or persists a stable opaque host identifier (URN) for dynamic client registration.
+/// Generates a valid RFC 4122 compliant UUIDv4 string formatted as an URN (urn:uuid:xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx).
+pub fn generate_uuid_v4() -> String {
+    let mut bytes = [0u8; 16];
+    let rng = ring::rand::SystemRandom::new();
+    use ring::rand::SecureRandom;
+    if rng.fill(&mut bytes).is_err() {
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        let pid = std::process::id();
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = ((seed.wrapping_add(i as u32 * 37) >> (i % 8)) ^ (pid >> (i % 16))) as u8;
+        }
+    }
+
+    // Version 4: set bits 4-7 of byte 6 to 0100 (0x40)
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    // Variant RFC 4122: set bits 6-7 of byte 8 to 10 (0x80..0xbf)
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+    format!(
+        "urn:uuid:{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5],
+        bytes[6], bytes[7],
+        bytes[8], bytes[9],
+        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    )
+}
+
+/// Retrieves or persists a stable opaque host identifier (RFC 4122 UUIDv4 URN) for dynamic client registration.
 pub fn get_or_create_host_id() -> String {
     if let Some(config_dir) = crate::config::config_file_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        let _ = fs::create_dir_all(&config_dir);
         let host_id_file = config_dir.join("host_id");
         if let Ok(id) = fs::read_to_string(&host_id_file) {
             let trimmed = id.trim();
-            if !trimmed.is_empty() {
+            // Validate that it's a valid urn:uuid of exactly 45 characters with version 4
+            if trimmed.starts_with("urn:uuid:") && trimmed.len() == 45 && trimmed.chars().nth(23) == Some('4') {
                 return trimmed.to_string();
             }
         }
-        let uuid = generate_random_string(32);
-        let host_urn = format!("urn:uuid:{}", uuid);
-        let _ = fs::write(&host_id_file, &host_urn);
-        return host_urn;
+        let uuid_urn = generate_uuid_v4();
+        let _ = fs::write(&host_id_file, &uuid_urn);
+        return uuid_urn;
     }
-    "urn:uuid:clicky-desktop-linux".to_string()
+    generate_uuid_v4()
 }
 
 /// Opens a URL in the user's default browser, ensuring Linux / NixOS dynamic library
@@ -490,5 +522,23 @@ mod tests {
     fn test_urlencoding() {
         assert_eq!(urlencoding("hello world"), "hello%20world");
         assert_eq!(urlencoding("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn test_generate_uuid_v4_format() {
+        let urn = generate_uuid_v4();
+        assert!(urn.starts_with("urn:uuid:"));
+        assert_eq!(urn.len(), 45);
+        let uuid = &urn["urn:uuid:".len()..];
+        // Must match 8-4-4-4-12 format
+        assert_eq!(uuid.chars().nth(8), Some('-'));
+        assert_eq!(uuid.chars().nth(13), Some('-'));
+        assert_eq!(uuid.chars().nth(18), Some('-'));
+        assert_eq!(uuid.chars().nth(23), Some('-'));
+        // Version 4 check
+        assert_eq!(uuid.chars().nth(14), Some('4'));
+        // Variant check (8, 9, a, or b)
+        let variant = uuid.chars().nth(19).unwrap();
+        assert!(matches!(variant, '8' | '9' | 'a' | 'b'));
     }
 }
