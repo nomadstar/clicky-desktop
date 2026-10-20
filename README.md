@@ -99,8 +99,7 @@ nix develop # or nix-shell
 cargo run
 ```
 
-> **Note for NixOS**: Add your user to the `input` group in `configuration.nix` so Clicky can track global hotkeys and mouse movement via evdev:
-> `users.users.<username>.extraGroups = [ "input" ];`
+> **Detailed Guide**: See [docs/nix-hyprland-setup.md](docs/nix-hyprland-setup.md) for full instructions on NixOS flakes, group permissions, and Home Manager configuration.
 
 ## Hyprland users
 
@@ -131,6 +130,8 @@ Or invoke the bundled helper script:
 ```bash
 ./scripts/kill-clicky.sh
 ```
+
+For complete configuration and troubleshooting, check the [NixOS & Hyprland Guide](docs/nix-hyprland-setup.md).
 
 ## Debug flags
 
