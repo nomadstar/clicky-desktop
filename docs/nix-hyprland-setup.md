@@ -132,7 +132,81 @@ Or run it directly from any terminal or launcher (`rofi`/`wofi`):
 
 ---
 
-## 5. Troubleshooting & FAQ
+## 5. Free & Local AI Providers Setup
+
+Clicky can run completely free or offline using open models, local GPUs (NVIDIA/CUDA), or free API tiers without requiring Anthropic, AssemblyAI, or ElevenLabs.
+
+You can configure them via the graphical Settings window (`CLICKY_FORCE_SETUP_WINDOW=1 nix run` or via tray icon) or directly in `~/.config/clicky-desktop/config.toml`.
+
+### A. Local NVIDIA GPU Whisper (STT)
+
+If you have an NVIDIA GPU, you can run a local Whisper server with CUDA acceleration (such as `faster-whisper-server` or `whisper.cpp`):
+
+```bash
+# Example running faster-whisper-server with CUDA:
+docker run --gpus all -p 8000:8000 fedirz/faster-whisper-server:latest-cuda
+```
+
+In `config.toml` (or Clicky Settings):
+```toml
+stt_provider = "openaicompat"
+custom_stt_base_url = "http://localhost:8000/v1"
+custom_stt_model = "Systran/faster-whisper-large-v3"
+```
+
+### B. Free Cloud Whisper (Groq)
+
+Transcribes in ~300ms with a free API key from [Groq](https://console.groq.com/):
+
+```toml
+stt_provider = "groq"
+groq_api_key = "gsk_..."
+```
+
+### C. Local Ollama (Vision LLM)
+
+Run local multimodal vision models on your GPU:
+
+```bash
+ollama run llama3.2-vision
+# or: ollama run qwen2.5-vl
+```
+
+In `config.toml`:
+```toml
+llm_provider = "ollama"
+custom_llm_base_url = "http://localhost:11434/v1"
+custom_llm_model = "llama3.2-vision"
+```
+
+### D. Free OpenRouter / Gemini (Vision LLM)
+
+Use free multimodal vision models via OpenRouter or Google AI Studio:
+
+```toml
+# OpenRouter (free tier)
+llm_provider = "openrouter"
+custom_llm_api_key = "sk-or-..."
+custom_llm_model = "google/gemini-2.0-flash-exp:free"
+
+# Google AI Studio / Gemini (free tier)
+# llm_provider = "gemini"
+# custom_llm_api_key = "AIzaSy..."
+# custom_llm_model = "gemini-2.0-flash"
+```
+
+### E. Free High-Fidelity TTS (Edge-TTS)
+
+Uses Microsoft Edge's natural neural voices without needing any API key:
+
+```toml
+tts_provider = "edgetts"
+custom_tts_voice = "es-ES-AlvaroNeural" # or "en-US-ChristopherNeural"
+```
+
+---
+
+## 6. Troubleshooting & FAQ
 
 | Problem | Cause | Solution |
 | :--- | :--- | :--- |
