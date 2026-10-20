@@ -229,6 +229,16 @@ fn main() {
                     runtime::LlmProvider::Disabled
                 }
             }
+            config::LlmProviderType::ChatGpt => {
+                let client_id = app_config.chatgpt_client_id.clone()
+                    .unwrap_or_else(|| api::chatgpt_oauth::DEFAULT_CHATGPT_CLIENT_ID.to_string());
+                let model = app_config.chatgpt_model.clone()
+                    .unwrap_or_else(|| "gpt-4o".to_string());
+                runtime::LlmProvider::ChatGpt {
+                    client_id,
+                    model,
+                }
+            }
             provider_type => {
                 let base_url = app_config.custom_llm_base_url.clone()
                     .unwrap_or_else(|| provider_type.default_base_url().to_string());

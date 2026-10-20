@@ -13,6 +13,10 @@ use std::sync::mpsc as std_mpsc;
 #[derive(Clone, PartialEq, Debug)]
 pub enum LlmProvider {
     Anthropic,
+    ChatGpt {
+        client_id: String,
+        model: String,
+    },
     OpenAiCompat {
         base_url: String,
         api_key: Option<String>,
@@ -56,6 +60,13 @@ pub fn log_runtime_config_state(app_config: &config::AppConfig, simulation_mode:
                 info!("LLM: Anthropic Claude");
             } else {
                 log::warn!("Set ANTHROPIC_API_KEY to enable AI responses");
+            }
+        }
+        LlmProviderType::ChatGpt => {
+            if api::chatgpt_oauth::ChatGptSession::load().is_some() {
+                info!("LLM: ChatGPT (Sign in with ChatGPT: Connected)");
+            } else {
+                log::warn!("LLM: ChatGPT (Not signed in — sign in via Clicky Settings)");
             }
         }
         LlmProviderType::OpenRouter => {
@@ -376,6 +387,28 @@ pub async fn run_llm_pipeline(
             )
             .await
             .map_err(|error| error.to_string())
+        }
+        LlmProvider::ChatGpt { client_id, model } => {
+            let session = api::chatgpt_oauth::ChatGptSession::load();
+            if let Some(mut session) = session {
+                match session.get_valid_token(&http_client, &client_id).await {
+                    Ok(token) => {
+                        api::openai_responses::send_chatgpt_vision_request(
+                            &http_client,
+                            &token,
+                            &model,
+                            system_prompt,
+                            &history_exchanges,
+                            &transcript,
+                            &capture.screenshots,
+                        )
+                        .await
+                    }
+                    Err(err) => Err(format!("ChatGPT authentication error: {err}")),
+                }
+            } else {
+                Err("Not signed in to ChatGPT. Please sign in via Clicky Settings.".into())
+            }
         }
         LlmProvider::OpenAiCompat { base_url, api_key, model } => {
             api::openai_compat::send_openai_vision_request(

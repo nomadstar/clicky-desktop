@@ -25,6 +25,7 @@ impl PushToTalkHotkey {
 pub enum LlmProviderType {
     #[default]
     Anthropic,
+    ChatGpt,
     OpenRouter,
     Ollama,
     Gemini,
@@ -36,6 +37,7 @@ impl LlmProviderType {
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Anthropic => "Anthropic (Claude)",
+            Self::ChatGpt => "ChatGPT (Sign in with ChatGPT)",
             Self::OpenRouter => "OpenRouter (Free / Multi-model)",
             Self::Ollama => "Ollama (Local / Free)",
             Self::Gemini => "Google Gemini / Antigravity",
@@ -47,6 +49,7 @@ impl LlmProviderType {
     pub fn default_base_url(self) -> &'static str {
         match self {
             Self::Anthropic => "https://api.anthropic.com/v1",
+            Self::ChatGpt => "https://api.openai.com/v1",
             Self::OpenRouter => "https://openrouter.ai/api/v1",
             Self::Ollama => "http://localhost:11434/v1",
             Self::Gemini => "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -58,6 +61,7 @@ impl LlmProviderType {
     pub fn default_model(self) -> &'static str {
         match self {
             Self::Anthropic => "claude-sonnet-4-6",
+            Self::ChatGpt => "gpt-4o",
             Self::OpenRouter => "google/gemini-2.0-flash-exp:free",
             Self::Ollama => "llama3.2-vision",
             Self::Gemini => "gemini-2.0-flash",
@@ -148,6 +152,12 @@ pub struct AppConfig {
     #[serde(default)]
     pub custom_llm_model: Option<String>,
 
+    // ChatGPT Sign-in settings
+    #[serde(default)]
+    pub chatgpt_client_id: Option<String>,
+    #[serde(default)]
+    pub chatgpt_model: Option<String>,
+
     // STT custom/generic settings
     #[serde(default)]
     pub groq_api_key: Option<String>,
@@ -179,6 +189,9 @@ impl AppConfig {
     pub fn has_llm_provider(&self) -> bool {
         match self.llm_provider {
             LlmProviderType::Anthropic => self.anthropic_api_key.is_some(),
+            LlmProviderType::ChatGpt => {
+                crate::api::chatgpt_oauth::ChatGptSession::load().is_some()
+            }
             LlmProviderType::Ollama => true, // Local models don't require API key
             LlmProviderType::OpenRouter | LlmProviderType::Gemini | LlmProviderType::Mistral => {
                 self.custom_llm_api_key.is_some()
@@ -243,6 +256,8 @@ impl AppConfig {
 
         // Generic / alternative provider overrides
         self.groq_api_key = env_override("GROQ_API_KEY", self.groq_api_key.take());
+        self.chatgpt_client_id = env_override("CHATGPT_CLIENT_ID", self.chatgpt_client_id.take());
+        self.chatgpt_model = env_override("CHATGPT_MODEL", self.chatgpt_model.take());
 
         if let Some(key) = env_override("OPENROUTER_API_KEY", None) {
             self.llm_provider = LlmProviderType::OpenRouter;
@@ -271,6 +286,7 @@ impl AppConfig {
         if let Some(prov) = std::env::var("LLM_PROVIDER").ok() {
             match prov.to_lowercase().as_str() {
                 "anthropic" => self.llm_provider = LlmProviderType::Anthropic,
+                "chatgpt" => self.llm_provider = LlmProviderType::ChatGpt,
                 "openrouter" => self.llm_provider = LlmProviderType::OpenRouter,
                 "ollama" => self.llm_provider = LlmProviderType::Ollama,
                 "gemini" => self.llm_provider = LlmProviderType::Gemini,

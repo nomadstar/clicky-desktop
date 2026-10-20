@@ -65,6 +65,8 @@ mod native {
         custom_llm_base_url: String,
         custom_llm_api_key: String,
         custom_llm_model: String,
+        chatgpt_client_id: String,
+        chatgpt_model: String,
 
         stt_provider: SttProviderType,
         assemblyai_api_key: String,
@@ -96,6 +98,8 @@ mod native {
                 custom_llm_base_url: config.custom_llm_base_url.unwrap_or_default(),
                 custom_llm_api_key: config.custom_llm_api_key.unwrap_or_default(),
                 custom_llm_model: config.custom_llm_model.unwrap_or_default(),
+                chatgpt_client_id: config.chatgpt_client_id.unwrap_or_default(),
+                chatgpt_model: config.chatgpt_model.unwrap_or_default(),
 
                 stt_provider: config.stt_provider,
                 assemblyai_api_key: config.assemblyai_api_key.unwrap_or_default(),
@@ -126,6 +130,8 @@ mod native {
                 custom_llm_base_url: normalized_value(&self.custom_llm_base_url),
                 custom_llm_api_key: normalized_value(&self.custom_llm_api_key),
                 custom_llm_model: normalized_value(&self.custom_llm_model),
+                chatgpt_client_id: normalized_value(&self.chatgpt_client_id),
+                chatgpt_model: normalized_value(&self.chatgpt_model),
 
                 stt_provider: self.stt_provider,
                 assemblyai_api_key: normalized_value(&self.assemblyai_api_key),
@@ -151,6 +157,11 @@ mod native {
                 LlmProviderType::Anthropic => {
                     if config.anthropic_api_key.is_none() {
                         return Err("Anthropic API key is required when using Claude".into());
+                    }
+                }
+                LlmProviderType::ChatGpt => {
+                    if crate::api::chatgpt_oauth::ChatGptSession::load().is_none() {
+                        return Err("Debes iniciar sesión con ChatGPT antes de guardar".into());
                     }
                 }
                 LlmProviderType::OpenRouter | LlmProviderType::Gemini | LlmProviderType::Mistral => {
@@ -237,6 +248,7 @@ mod native {
                             .selected_text(self.llm_provider.display_name())
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut self.llm_provider, LlmProviderType::Anthropic, LlmProviderType::Anthropic.display_name());
+                                ui.selectable_value(&mut self.llm_provider, LlmProviderType::ChatGpt, LlmProviderType::ChatGpt.display_name());
                                 ui.selectable_value(&mut self.llm_provider, LlmProviderType::OpenRouter, LlmProviderType::OpenRouter.display_name());
                                 ui.selectable_value(&mut self.llm_provider, LlmProviderType::Ollama, LlmProviderType::Ollama.display_name());
                                 ui.selectable_value(&mut self.llm_provider, LlmProviderType::Gemini, LlmProviderType::Gemini.display_name());
@@ -250,6 +262,55 @@ mod native {
                                 ui.label("Anthropic API key:");
                                 ui.add(egui::TextEdit::singleline(&mut self.anthropic_api_key).password(true).desired_width(f32::INFINITY));
                                 ui.small("Uses Claude 3.5/3.7 Sonnet with native Computer Use.");
+                            }
+                            LlmProviderType::ChatGpt => {
+                                let session = crate::api::chatgpt_oauth::ChatGptSession::load();
+                                if let Some(_sess) = session {
+                                    ui.colored_label(egui::Color32::from_rgb(90, 180, 120), "✓ Sesión activa con ChatGPT (Plus/Pro/Team)");
+                                    if ui.button("Cerrar sesión de ChatGPT").clicked() {
+                                        let _ = crate::api::chatgpt_oauth::ChatGptSession::clear();
+                                        self.status_message = Some("Sesión de ChatGPT cerrada.".into());
+                                        self.status_is_error = false;
+                                    }
+                                } else {
+                                    ui.colored_label(egui::Color32::from_rgb(220, 140, 60), "⚠ No conectado. Inicia sesión con tu cuenta de ChatGPT:");
+                                    if ui.button("🔑 Iniciar sesión con ChatGPT (Abrir navegador)").clicked() {
+                                        let client_id = if self.chatgpt_client_id.trim().is_empty() {
+                                            crate::api::chatgpt_oauth::DEFAULT_CHATGPT_CLIENT_ID.to_string()
+                                        } else {
+                                            self.chatgpt_client_id.trim().to_string()
+                                        };
+                                        self.status_message = Some("Esperando autorización en el navegador...".into());
+                                        self.status_is_error = false;
+
+                                        std::thread::spawn(move || {
+                                            let rt = match tokio::runtime::Runtime::new() {
+                                                Ok(rt) => rt,
+                                                Err(e) => {
+                                                    log::error!("Failed to create runtime: {e}");
+                                                    return;
+                                                }
+                                            };
+                                            let client = reqwest::Client::new();
+                                            match rt.block_on(crate::api::chatgpt_oauth::login_with_chatgpt(&client, &client_id)) {
+                                                Ok(_) => log::info!("ChatGPT OAuth login successful!"),
+                                                Err(e) => log::error!("ChatGPT OAuth login failed: {}", e),
+                                            }
+                                        });
+                                    }
+                                }
+
+                                ui.add_space(4.0);
+                                ui.label("Model (e.g. gpt-4o, gpt-4o-mini):");
+                                if self.chatgpt_model.trim().is_empty() {
+                                    self.chatgpt_model = "gpt-4o".to_string();
+                                }
+                                ui.add(egui::TextEdit::singleline(&mut self.chatgpt_model).desired_width(f32::INFINITY));
+
+                                ui.collapsing("Opciones avanzadas (Client ID)", |ui| {
+                                    ui.label("Custom Client ID (opcional):");
+                                    ui.add(egui::TextEdit::singleline(&mut self.chatgpt_client_id).desired_width(f32::INFINITY));
+                                });
                             }
                             LlmProviderType::OpenRouter => {
                                 ui.label("OpenRouter API key:");
