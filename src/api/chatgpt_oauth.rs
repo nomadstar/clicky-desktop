@@ -93,11 +93,42 @@ impl ChatGptSession {
     }
 }
 
+/// Opens a URL in the user's default browser, ensuring Linux / NixOS dynamic library
+/// environment variables (LD_LIBRARY_PATH) do not corrupt the spawned browser process.
+pub fn open_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let launchers: &[(&str, &[&str])] = &[
+            ("xdg-open", &[url]),
+            ("gio", &["open", url]),
+            ("firefox", &[url]),
+            ("google-chrome-stable", &[url]),
+            ("chromium", &[url]),
+            ("brave", &[url]),
+        ];
+
+        for (bin, args) in launchers {
+            if let Ok(child) = std::process::Command::new(bin)
+                .args(*args)
+                .env_remove("LD_LIBRARY_PATH")
+                .env_remove("LD_PRELOAD")
+                .spawn()
+            {
+                info!("Launched browser via {} (pid: {})", bin, child.id());
+                return Ok(());
+            }
+        }
+    }
+
+    webbrowser::open(url).map_err(|e| format!("Failed to open browser: {e}"))
+}
+
 /// Initiates the OAuth PKCE flow by opening the user's browser and listening
 /// on a local HTTP port for the authorization redirect callback.
 pub async fn login_with_chatgpt(
     http_client: &Client,
     client_id: &str,
+    on_auth_url: Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>,
 ) -> Result<ChatGptSession, String> {
     // 1. Generate PKCE verifier and challenge
     let code_verifier = generate_random_string(64);
@@ -126,7 +157,13 @@ pub async fn login_with_chatgpt(
     );
 
     info!("Opening browser for Sign in with ChatGPT: {}", auth_url);
-    if let Err(e) = webbrowser::open(&auth_url) {
+    if let Some(ref slot) = on_auth_url {
+        if let Ok(mut lock) = slot.lock() {
+            *lock = Some(auth_url.clone());
+        }
+    }
+
+    if let Err(e) = open_browser(&auth_url) {
         warn!("Failed to open browser automatically: {e}. Open URL manually: {auth_url}");
     }
 
