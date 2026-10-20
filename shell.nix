@@ -13,6 +13,7 @@ pkgs.mkShell {
     alsa-lib
     pipewire
     gtk3
+    libayatana-appindicator
     openssl
     libGL
     libgbm
@@ -30,4 +31,9 @@ pkgs.mkShell {
   ];
 
   LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+  shellHook = ''
+    export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath (with pkgs; [
+      alsa-lib pipewire gtk3 libayatana-appindicator openssl libGL libgbm libxkbcommon wayland libx11 libxcursor libxrandr libxi libxinerama libxcb
+    ])}:$LD_LIBRARY_PATH"
+  '';
 }

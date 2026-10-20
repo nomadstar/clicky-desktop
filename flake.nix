@@ -15,6 +15,7 @@
           alsa-lib
           pipewire
           gtk3
+          libayatana-appindicator
           openssl
           libGL
           libgbm
