@@ -1,6 +1,5 @@
 use crate::app::platform::PlatformInfo;
 use crate::audio::UiEvent;
-use crate::config::AppConfig;
 use crate::runtime::{self, TtsConfig};
 use crate::screenshot;
 use base64::Engine;
@@ -211,7 +210,7 @@ async fn handle_client(
             }
             IpcRequest::Screenshot => {
                 let plat = state.platform.clone();
-                match tokio::task::spawn_blocking(move || screenshot::capture_all_screens(&plat)).await
+                match tokio::task::spawn_blocking(move || screenshot::capture_all_screens(0.0, 0.0, &plat)).await
                 {
                     Ok(Ok(capture)) => {
                         if let Some(first_shot) = capture.screenshots.first() {

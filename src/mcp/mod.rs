@@ -215,7 +215,7 @@ async fn handle_tool_call(name: &str, args: Value) -> Result<Value, String> {
     match name {
         "clicky_status" => match ipc::send_command(&IpcRequest::GetStatus).await {
             Ok(IpcResponse::Status {
-                running,
+                running: _,
                 voice_state,
                 version,
             }) => Ok(json!({
@@ -269,7 +269,7 @@ async fn handle_tool_call(name: &str, args: Value) -> Result<Value, String> {
                 _ => {
                     // Fallback to direct screenshot capture even if Clicky daemon is not running
                     let platform = platform::detect();
-                    match screenshot::capture_all_screens(&platform) {
+                    match screenshot::capture_all_screens(0.0, 0.0, &platform) {
                         Ok(capture) => {
                             if let Some(first_shot) = capture.screenshots.first() {
                                 if let Some(path) = save_path {
