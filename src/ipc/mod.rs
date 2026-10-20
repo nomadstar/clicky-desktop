@@ -276,3 +276,55 @@ pub async fn send_command(req: &IpcRequest) -> Result<IpcResponse, String> {
 
     Ok(response)
 }
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ipc_request_serialization() {
+        let req = IpcRequest::Point {
+            x: 100.5,
+            y: 200.0,
+            label: Some("test target".to_string()),
+        };
+        let serialized = serde_json::to_string(&req).unwrap();
+        assert!(serialized.contains("Point"));
+        assert!(serialized.contains("test target"));
+
+        let deserialized: IpcRequest = serde_json::from_str(&serialized).unwrap();
+        match deserialized {
+            IpcRequest::Point { x, y, label } => {
+                assert_eq!(x, 100.5);
+                assert_eq!(y, 200.0);
+                assert_eq!(label, Some("test target".to_string()));
+            }
+            _ => panic!("Expected Point variant"),
+        }
+    }
+
+    #[test]
+    fn test_ipc_response_serialization() {
+        let resp = IpcResponse::Status {
+            running: true,
+            voice_state: "Idle".to_string(),
+            version: "0.1.0".to_string(),
+        };
+        let serialized = serde_json::to_string(&resp).unwrap();
+        let deserialized: IpcResponse = serde_json::from_str(&serialized).unwrap();
+        match deserialized {
+            IpcResponse::Status { running, voice_state, version } => {
+                assert!(running);
+                assert_eq!(voice_state, "Idle");
+                assert_eq!(version, "0.1.0");
+            }
+            _ => panic!("Expected Status variant"),
+        }
+    }
+
+    #[test]
+    fn test_socket_path_not_empty() {
+        let path = get_socket_path();
+        assert!(!path.as_os_str().is_empty());
+    }
+}

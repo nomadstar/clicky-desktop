@@ -348,3 +348,42 @@ async fn handle_tool_call(name: &str, args: Value) -> Result<Value, String> {
         unknown => Err(format!("Unknown tool: {}", unknown)),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mcp_initialize_request_parsing() {
+        let raw = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}"#;
+        let req: JsonRpcRequest = serde_json::from_str(raw).unwrap();
+        assert_eq!(req.jsonrpc, "2.0");
+        assert_eq!(req.id, Some(json!(1)));
+        assert_eq!(req.method, "initialize");
+    }
+
+    #[test]
+    fn test_mcp_tool_call_request_parsing() {
+        let raw = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"clicky_point","arguments":{"x":100,"y":200,"label":"hello"}}}"#;
+        let req: JsonRpcRequest = serde_json::from_str(raw).unwrap();
+        assert_eq!(req.method, "tools/call");
+        let params = req.params.unwrap();
+        assert_eq!(params["name"], "clicky_point");
+        assert_eq!(params["arguments"]["x"], 100);
+        assert_eq!(params["arguments"]["label"], "hello");
+    }
+
+    #[test]
+    fn test_mcp_response_serialization() {
+        let resp = JsonRpcResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(42)),
+            result: Some(json!({ "status": "ok" })),
+            error: None,
+        };
+        let serialized = serde_json::to_string(&resp).unwrap();
+        assert!(serialized.contains(r#""id":42"#));
+        assert!(serialized.contains(r#""status":"ok""#));
+        assert!(!serialized.contains(r#""error""#));
+    }
+}
