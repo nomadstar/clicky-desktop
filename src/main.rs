@@ -283,7 +283,7 @@ fn main() {
         http_client: http_client.clone(),
         tts_config: Arc::clone(&shared_tts_config),
     };
-    let _ipc_task = ipc::start_ipc_server(ui_event_tx.clone(), ipc_state);
+    let _ipc_task = ipc::start_ipc_server(tokio_rt.handle(), ui_event_tx.clone(), ipc_state);
 
     info!("Entering main render loop at 60fps");
 

@@ -73,10 +73,11 @@ pub struct IpcSharedState {
 
 /// Starts the Unix domain socket server in a Tokio background task.
 pub fn start_ipc_server(
+    rt_handle: &tokio::runtime::Handle,
     ui_tx: std_mpsc::Sender<UiEvent>,
     shared_state: IpcSharedState,
 ) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
+    rt_handle.spawn(async move {
         let socket_path = get_socket_path();
 
         // Clean up any stale socket file
