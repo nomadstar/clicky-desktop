@@ -10,6 +10,7 @@ mod native {
     };
     use eframe::egui;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
 
     static SETTINGS_WINDOW_OPEN: AtomicBool = AtomicBool::new(false);
 
@@ -87,6 +88,8 @@ mod native {
         autostart_enabled: bool,
         status_message: Option<String>,
         status_is_error: bool,
+        chatgpt_auth_url: Arc<Mutex<Option<String>>>,
+        chatgpt_status: Arc<Mutex<Option<(String, bool)>>>,
     }
 
     impl SettingsApp {
@@ -120,6 +123,8 @@ mod native {
                 autostart_enabled: config.autostart_enabled,
                 status_message: None,
                 status_is_error: false,
+                chatgpt_auth_url: Arc::new(Mutex::new(None)),
+                chatgpt_status: Arc::new(Mutex::new(None)),
             }
         }
 
